@@ -4,7 +4,7 @@
 
 # Bridging Discourse Treebanks with a Unified RST Parser
 
-Official code for the CODI 2025 paper **Bridging Discourse Treebanks with a Unified RST Parser**.
+Official code for the CODI 2025 paper.
 
 ## Inference
 
