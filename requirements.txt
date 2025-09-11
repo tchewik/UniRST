@@ -1,0 +1,14 @@
+numpy>=1.24
+PyYAML>=6
+tqdm>=4.66
+regex>=2024.1.1
+rich>=13
+transformers>=4.40,<5
+tokenizers>=0.15
+huggingface-hub>=0.22
+safetensors>=0.4
+spacy>=3.8,<3.9
+razdel>=0.5
+jsonnet>=0.21
+clearml>=2
+wandb>=0.16
