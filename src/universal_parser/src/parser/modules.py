@@ -144,8 +144,13 @@ class EncoderRNN(nn.Module):
                 predict_edu_breaks_list.append(cur_edu_break)
             else:
                 cur_edu_break = edu_breaks[i]  # Only gold segmentation for parser during training
-                total_edu_loss += self.segmenters[dataset_index[i]].train_segment_loss(
-                    embeddings.squeeze(), cur_edu_break, cur_sent_break) * self.corpora_weights[dataset_index[i]]
+
+                if len(self.corpora_weights) > 1:
+                    total_edu_loss += self.segmenters[dataset_index[i]].train_segment_loss(
+                        embeddings.squeeze(), cur_edu_break, cur_sent_break) * self.corpora_weights[dataset_index[i]]
+                else:
+                    # ToDO: Only for testing the final model with Predictor's inference
+                    total_edu_loss += 0
 
             outputs, hidden = self.encode_edus(self.dropout(embeddings.squeeze(dim=0)), cur_edu_break)
             tem_outputs.append(outputs)
