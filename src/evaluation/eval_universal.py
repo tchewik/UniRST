@@ -96,8 +96,6 @@ class EvalUniversal:
             Data: Predictions.
         """
 
-        print(f'{use_pred_segmentation = }')
-
         loss_tree_all = []
         loss_label_all = []
         correct_span = 0
