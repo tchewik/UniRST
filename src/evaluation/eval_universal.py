@@ -96,6 +96,8 @@ class EvalUniversal:
             Data: Predictions.
         """
 
+        print(f'{use_pred_segmentation = }')
+
         loss_tree_all = []
         loss_label_all = []
         correct_span = 0
@@ -286,14 +288,14 @@ class EvalUniversal:
 
         return results
 
-    def save_trees(self, output_path):
+    def save_trees(self, output_path, use_pred_segmentation=True):
         """
         Saves the predictions in the given pickle file.
 
         Args:
             output_path (str): Path to the output pickle file.
         """
-        metrics, trees = self.eval_model(self.data, return_trees=True)
+        metrics, trees = self.eval_model(self.data, use_pred_segmentation=use_pred_segmentation, return_trees=True)
         with open(output_path, 'wb') as f:
             pickle.dump(trees, f)
 
