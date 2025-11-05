@@ -1,12 +1,14 @@
 import ast
 import json
 import os
+import pickle
+from typing import List, Optional, Sequence
 
 import razdel
 import torch
 from isanlp.annotation import Token
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoModel, AutoTokenizer, AutoConfig
 
 from .data_manager import DataManager
 from .du_converter import DUConverter
@@ -27,35 +29,137 @@ def str2bool(value):
 class Predictor:
     def __init__(self, model_dir: str, cuda_device: int, relinventory_idx: int = 0):
 
+        self.model_dir = model_dir
         self.model_path = os.path.join(model_dir, 'best_weights.pt')
         self.config_path = os.path.join(model_dir, 'config.json')
         self.config = json.load(open(self.config_path))
         self.relinventory_idx = relinventory_idx
 
-        self.data_managers = []
-        for corpus_name in ast.literal_eval(self.config['data']['corpora']):
-            data_manager_path = f'data/dms/data_manager_{corpus_name.lower()}.pickle'
-            dp = DataManager(corpus=corpus_name).from_pickle(data_manager_path)
-            self.data_managers.append(dp)
+        corpora = self.config['data']['corpora']
+        if isinstance(corpora, str):
+            corpora = ast.literal_eval(corpora)
+
+        self.data_managers: List[Optional[DataManager]] = []
+        self.relation_tables: List[Sequence[str]] = []
+        for corpus_name in corpora:
+            data_manager = self._load_data_manager(corpus_name)
+            self.data_managers.append(data_manager)
+
+            if data_manager is not None:
+                self.relation_tables.append(data_manager.relation_table)
+                continue
+
+            relation_table = self._load_relation_table(corpus_name)
+            if relation_table is None:
+                raise FileNotFoundError(
+                    f"Could not find relation inventory for corpus '{corpus_name}'. "
+                    'Ensure that relation_table_*.txt files or data manager pickles are packaged with the model.'
+                )
+            self.relation_tables.append(relation_table)
 
         self._cuda_device = torch.device('cpu' if cuda_device == -1 else f'cuda:{cuda_device}')
 
         self._load_model()
 
+    def _resolve_resource(self, relative_path: str) -> Optional[str]:
+        if os.path.isabs(relative_path):
+            return relative_path if os.path.exists(relative_path) else None
+
+        search_roots = [None]
+        if self.model_dir:
+            search_roots.extend(
+                [
+                    self.model_dir,
+                    os.path.join(self.model_dir, 'data'),
+                    os.path.join(self.model_dir, 'data', 'dms'),
+                ]
+            )
+
+        for root in dict.fromkeys(search_roots):
+            if root is None:
+                candidate = relative_path
+            else:
+                candidate = os.path.join(root, relative_path)
+
+            if os.path.exists(candidate):
+                return candidate
+
+        return None
+
+    def _corpus_variants(self, corpus_name: str) -> List[str]:
+        lower = corpus_name.lower()
+        variants = {lower}
+        variants.add(lower.replace('.', '_'))
+        variants.add(lower.replace('-', '_'))
+
+        if lower.endswith('-tr'):
+            variants.add(lower[:-3])
+        if lower.endswith('_tr'):
+            variants.add(lower[:-3])
+
+        if lower in {'rst-dt-tr', 'rst_dt_tr'}:
+            variants.update({'rst-dt', 'rst_dt'})
+        if lower in {'gum10-tr', 'gum10_tr'}:
+            variants.update({'gum10', 'gum'})
+
+        return [variant for variant in variants if variant]
+
+    def _load_data_manager(self, corpus_name: str) -> Optional[DataManager]:
+        candidates: List[str] = []
+        for variant in self._corpus_variants(corpus_name):
+            filename = f'data_manager_{variant}.pickle'
+            candidates.extend(
+                [
+                    os.path.join('data', 'dms', filename),
+                    os.path.join('data', filename),
+                    filename,
+                ]
+            )
+
+        for rel_path in dict.fromkeys(candidates):
+            resolved = self._resolve_resource(rel_path)
+            if not resolved:
+                continue
+
+            try:
+                with open(resolved, 'rb') as f:
+                    return pickle.load(f)
+            except Exception:
+                continue
+
+        return None
+
+    def _load_relation_table(self, corpus_name: str) -> Optional[List[str]]:
+        for variant in self._corpus_variants(corpus_name):
+            filename = f'relation_table_{variant}.txt'
+            resolved = self._resolve_resource(filename)
+            if not resolved:
+                continue
+
+            with open(resolved, 'r', encoding='utf8') as f:
+                rows = [line.strip() for line in f if line.strip()]
+                if rows:
+                    return rows
+
+        return None
+
     def _load_model(self):
         self.tokenizer = AutoTokenizer.from_pretrained(self.config['model']['transformer']['model_name'], use_fast=True)
-        transformer = AutoModel.from_pretrained(self.config['model']['transformer']['model_name']).to(self._cuda_device)
+        self.tokenizer.model_max_length = int(
+            1e9)  # The parser relies on a sliding window encoding, so we'll suppress the max_len warning this way.
+
+        transformer_config = AutoConfig.from_pretrained(self.config['model']['transformer']['model_name'])
+        transformer = AutoModel.from_config(transformer_config).to(self._cuda_device)
 
         self.tokenizer.add_tokens(['<P>'])
         transformer.resize_token_embeddings(len(self.tokenizer))
 
-        rel_tables = [dm.relation_table for dm in self.data_managers]
-        use_union = self.config['model'].get('use_union_relations', False) and len(rel_tables) > 1
+        use_union = self.config['model'].get('use_union_relations', False) and len(self.relation_tables) > 1
 
         if use_union:
             union_table = []
             label2id = {}
-            for table in rel_tables:
+            for table in self.relation_tables:
                 for lbl in table:
                     if lbl not in label2id:
                         label2id[lbl] = len(union_table)
@@ -63,7 +167,7 @@ class Predictor:
 
             dataset_masks = []
             label_maps = []
-            for table in rel_tables:
+            for table in self.relation_tables:
                 mask = [False] * len(union_table)
                 mapping_tbl = []
                 for lbl in table:
@@ -76,16 +180,16 @@ class Predictor:
             self.label_maps = label_maps
 
             model_config = {
-                'relation_tables': rel_tables,
+                'relation_tables': self.relation_tables,
                 'relation_vocab': union_table,
                 'dataset_masks': dataset_masks,
                 'classes_numbers': [len(union_table)],
-                'dataset2classifier': list(range(len(rel_tables))),
+                'dataset2classifier': list(range(len(self.relation_tables))),
             }
         else:
             unique_tables = []
             mapping = []
-            for table in rel_tables:
+            for table in self.relation_tables:
                 for idx, ut in enumerate(unique_tables):
                     if table == ut:
                         mapping.append(idx)
