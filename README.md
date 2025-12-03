@@ -4,7 +4,7 @@
 
 # Bridging Discourse Treebanks with a Unified RST Parser
 
-Official code for the [CODI 2025 paper](https://aclanthology.org/2025.codi-1.17/).
+Official code for the [CODI 2025 paper](https://aclanthology.org/2025.codi-1.17/) ([Slides](slides_codi25.pdf)).
 
 ## Inference
 
